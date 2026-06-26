@@ -55,6 +55,42 @@ const SNIPPETS = [
     injectedLine:"    let count = 0;",
     explanation:"'let count' creates a local variable; this.count is never reset.",
     patch:"    this.count = 0;" },
+  { id:"lastn",    difficulty:"easy",   language:"Python",     label:"last_n",
+    lines:["def last_n(items, n):","    start = len(items) - n","    return items[start:]"],
+    bugLine:1, bugType:"off-by-one",
+    injectedLine:"    start = len(items) - n + 1",
+    explanation:"Adding 1 to the start index shifts the window right by one, returning n-1 items instead of n.",
+    patch:"    start = len(items) - n" },
+  { id:"owner",    difficulty:"easy",   language:"JavaScript", label:"getOwnerName",
+    lines:["function getOwnerName(item) {","  if (item.owner === null) return \"none\";","  return item.owner.name;","}"],
+    bugLine:1, bugType:"null-deref",
+    injectedLine:"  if (item.owner !== null) return \"none\";",
+    explanation:"!== reverses the guard — the function returns early for valid owners and then dereferences a null owner.",
+    patch:"  if (item.owner === null) return \"none\";" },
+  { id:"status",   difficulty:"easy",   language:"Python",     label:"is_valid_status",
+    lines:["def is_valid_status(status):","    valid = [\"active\", \"pending\", \"closed\"]","    if status in valid:","        return True","    return False"],
+    bugLine:2, bugType:"logic-invert",
+    injectedLine:"    if status not in valid:",
+    explanation:"'not in' inverts the check — invalid statuses are accepted and valid ones are rejected.",
+    patch:"    if status in valid:" },
+  { id:"priority", difficulty:"easy",   language:"JavaScript", label:"priorityLabel",
+    lines:["function priorityLabel(level) {","  let label = \"\";","  switch (level) {","    case 1: label = \"Low\"; break;","    case 2: label = \"Medium\"; break;","    case 3: label = \"High\"; break;","  }","  return label;","}"],
+    bugLine:4, bugType:"missing-break",
+    injectedLine:"    case 2: label = \"Medium\";",
+    explanation:"Without break, case 2 falls through into case 3 — any level-2 call returns 'High'.",
+    patch:"    case 2: label = \"Medium\"; break;" },
+  { id:"mulall",   difficulty:"easy",   language:"Python",     label:"multiply_all",
+    lines:["def multiply_all(nums, factor):","    result = []","    for n in nums:","        result.append(n * factor)","    return result"],
+    bugLine:3, bugType:"wrong-op",
+    injectedLine:"        result.append(n + factor)",
+    explanation:"Adding factor to each element instead of multiplying produces the wrong transformation.",
+    patch:"        result.append(n * factor)" },
+  { id:"timer",    difficulty:"easy",   language:"JavaScript", label:"Timer class",
+    lines:["class Timer {","  constructor() { this.elapsed = 0; }","  tick(ms) { this.elapsed += ms; }","  restart() {","    this.elapsed = 0;","  }","}"],
+    bugLine:4, bugType:"uninit-var",
+    injectedLine:"    elapsed = 0;",
+    explanation:"'elapsed = 0' assigns to a global variable, not this.elapsed — the timer is never actually reset.",
+    patch:"    this.elapsed = 0;" },
   { id:"discount", difficulty:"medium", language:"Python",     label:"apply_discount",
     lines:["def apply_discount(price, pct):","    if pct >= 0 and pct <= 100:","        return price * (1 - pct / 100)","    raise ValueError('invalid pct')"],
     bugLine:1, bugType:"predicate-weak",
@@ -109,6 +145,503 @@ const SNIPPETS = [
     injectedLine:"    if (input[i] !== secret[i]) return false;",
     explanation:"Early-return leaks secret bytes via timing — attacker narrows correct chars one by one.",
     patch:"    diff |= input.charCodeAt(i) ^ secret.charCodeAt(i);" },
+];
+
+const ENCYCLOPEDIA = [
+  // ── Easy ─────────────────────────────────────────────────────────────────────
+  {
+    id:"off-by-one", name:"Off-by-one Error", tier:"easy", color:"#f59e0b", lang:"C",
+    description:"A calculation that is off by exactly 1 — in loop bounds, array indices, or length fields. The code looks nearly correct and often passes basic testing, which makes these bugs dangerous in security-critical code.",
+    cves:[
+      { id:"CVE-2002-0083", product:"OpenSSH ≤ 3.3",
+        desc:"Off-by-one in channel array allocation let a remote authenticated user overwrite adjacent memory and gain root privileges on the server." },
+      { id:"CVE-2021-28041", product:"OpenSSH 8.5p1 (ssh-agent)",
+        desc:"Off-by-one in PKCS#11 library unloading caused a double-free on the one-too-many element, enabling memory corruption in the agent." },
+    ],
+    vuln:[
+      "char buf[8];",
+      "/* copies 8 bytes — no room for null terminator */",
+      "strncpy(buf, input, 8);",
+      "buf[8] = '\\0';  // ← one byte PAST end of buf!",
+    ],
+    fix:[
+      "char buf[8];",
+      "strncpy(buf, input, sizeof(buf) - 1);",
+      "buf[sizeof(buf) - 1] = '\\0';  // always safe",
+    ],
+    explanation:"buf[8] has valid indices 0–7. Writing buf[8] is undefined behaviour. Always reserve one slot for '\\0': copy at most sizeof(buf)-1 bytes, then terminate at index sizeof(buf)-1.",
+  },
+  {
+    id:"null-deref", name:"Null Dereference", tier:"easy", color:"#ef4444", lang:"C",
+    description:"Reading or writing through a NULL pointer. At best it crashes the process; on older kernels with mmap_min_addr=0 the attacker could map page 0 and turn the crash into code execution.",
+    cves:[
+      { id:"CVE-2009-3620", product:"Linux kernel (ati128 GPU driver)",
+        desc:"Null pointer dereference in ati128_do_wait_for_fifo — exploitable by a local user to escalate privileges by mapping page 0 (mmap_min_addr=0 era)." },
+      { id:"CVE-2011-2517", product:"Linux kernel (mac80211 wireless)",
+        desc:"Null dereference in the wireless stack when processing malformed management frames from a nearby AP, causing kernel panic." },
+    ],
+    vuln:[
+      "struct user *u = find_user(id);",
+      "/* u is NULL when user does not exist */",
+      "printf(\"%s\\n\", u->name);  // ← crash or worse",
+    ],
+    fix:[
+      "struct user *u = find_user(id);",
+      "if (u == NULL) return -ENOENT;",
+      "printf(\"%s\\n\", u->name);  // safe",
+    ],
+    explanation:"Always check pointer results from lookup functions before dereferencing. Go and Rust enforce this via nil-checks / Option<T>; in C and C++ it must be done manually. AddressSanitizer catches these at test time.",
+  },
+  {
+    id:"logic-invert", name:"Inverted Condition", tier:"easy", color:"#a78bfa", lang:"C",
+    description:"A boolean guard that uses the wrong comparator or negation, letting invalid inputs through or blocking valid ones. In authentication code a single wrong operator grants unlimited access.",
+    cves:[
+      { id:"CVE-2014-1266", product:"Apple iOS / OS X (SecureTransport)",
+        desc:"A duplicated 'goto fail' meant the return value of the signature verification step was always 0 (success), silently bypassing TLS certificate validation for all connections." },
+      { id:"CVE-2020-0601", product:"Windows CryptoAPI (crypt32.dll)",
+        desc:"ECC public-key validation logic error allowed forged certificates to be accepted as trusted, enabling MITM attacks against HTTPS and Authenticode signatures." },
+    ],
+    vuln:[
+      "/* strcmp returns 0 on MATCH, non-zero on mismatch */",
+      "if (strcmp(input_pw, stored_pw) != 0) {",
+      "    grant_access();  // ← grants on MISMATCH!",
+      "}",
+    ],
+    fix:[
+      "if (strcmp(input_pw, stored_pw) == 0) {",
+      "    grant_access();",
+      "}",
+    ],
+    explanation:"strcmp returns 0 when strings are equal. Comparing != 0 inverts the guard — every wrong password gets access. Always unit-test the rejection path explicitly; static analysis (clang-tidy) flags suspicious negations in auth contexts.",
+  },
+  {
+    id:"missing-break", name:"Missing break", tier:"easy", color:"#fb923c", lang:"C",
+    description:"Omitting a break statement causes switch-case fall-through: execution continues into the next case body, running unintended code that may corrupt state, bypass checks, or trigger heap corruption.",
+    cves:[
+      { id:"CVE-2019-3846", product:"Linux kernel (mwifiex WiFi driver)",
+        desc:"Missing break in mwifiex_process_bss_descriptor_with_ie() caused fall-through to a different case, overflowing a heap buffer. A malicious AP could trigger RCE." },
+      { id:"CVE-2020-8835", product:"Linux kernel (eBPF verifier)",
+        desc:"Switch fall-through in the eBPF verifier's type-tracking logic caused type confusion, allowing local users to escalate privileges." },
+    ],
+    vuln:[
+      "switch (command) {",
+      "    case CMD_READ:",
+      "        read_data();",
+      "        // missing break — falls through!",
+      "    case CMD_WRITE:",
+      "        write_data();  // executes after CMD_READ too",
+      "        break;",
+      "}",
+    ],
+    fix:[
+      "switch (command) {",
+      "    case CMD_READ:",
+      "        read_data();",
+      "        break;  // ← explicit",
+      "    case CMD_WRITE:",
+      "        write_data();",
+      "        break;",
+      "}",
+    ],
+    explanation:"C/C++ fall through by default. Every case needs explicit break unless intentional (annotate with /* fallthrough */). Enable -Wimplicit-fallthrough in GCC/Clang. In Go and Rust, fall-through is opt-in (fallthrough keyword / never), reversing the dangerous default.",
+  },
+  {
+    id:"wrong-op", name:"Wrong Operator", tier:"easy", color:"#38bdf8", lang:"C",
+    description:"Using = instead of ==, & instead of &&, > instead of >=, or similar. The code compiles cleanly and looks right at a glance, but the semantics are entirely different — often silently granting access or computing wrong sizes.",
+    cves:[
+      { id:"CVE-2015-1538", product:"Android Stagefright (MP4 parser)",
+        desc:"Wrong arithmetic operator caused integer underflow in the stsc atom parser — the miscalculated value produced a heap buffer overflow exploitable via a crafted MMS message, without user interaction." },
+      { id:"CVE-2021-3156", product:"sudo (argument-parsing)",
+        desc:"An off-by-one in the backslash-escape handling used the wrong operator on the length calculation, producing a heap overflow that allowed any local user to gain root." },
+    ],
+    vuln:[
+      "/* bitwise & instead of logical && */",
+      "if (ptr & ptr->is_valid) {  // true when ptr is non-null",
+      "    use(ptr);               // is_valid field never checked!",
+      "}",
+      "",
+      "/* assignment in condition (always true) */",
+      "if (rc = do_auth(user, pass)) { grant(); }",
+    ],
+    fix:[
+      "/* logical && short-circuits correctly */",
+      "if (ptr && ptr->is_valid) {",
+      "    use(ptr);",
+      "}",
+      "",
+      "/* separate assignment from check */",
+      "rc = do_auth(user, pass);",
+      "if (rc == AUTH_OK) { grant(); }",
+    ],
+    explanation:"Enable -Wall -Wextra in C/C++ to catch = vs == in conditionals. Use === in JavaScript. Python makes = in conditions a syntax error by design. In C, wrap intentional assignment-in-condition in an extra pair of parentheses: if ((x = f())).",
+  },
+  {
+    id:"uninit-var", name:"Uninitialised Variable", tier:"easy", color:"#34d399", lang:"C",
+    description:"Using a variable before assigning it a defined value. In C/C++ the value is whatever garbage was in that stack slot — this leaks kernel data or enables logic errors. In managed languages it throws or silently produces a zero/null.",
+    cves:[
+      { id:"CVE-2017-1000410", product:"Linux kernel (Bluetooth L2CAP)",
+        desc:"Uninitialised stack variable in l2cap_parse_conf_rsp leaked up to 32 bytes of kernel stack memory to unprivileged local users via getsockopt, exposing KASLR addresses." },
+      { id:"CVE-2020-14386", product:"Linux kernel (AF_PACKET)",
+        desc:"Uninitialised variable in packet_recvmsg led to a heap out-of-bounds write, exploitable for local privilege escalation to root." },
+    ],
+    vuln:[
+      "int result;   // uninitialised",
+      "if (condition) {",
+      "    result = compute();",
+      "}",
+      "return result;  // ← garbage value if condition is false",
+    ],
+    fix:[
+      "int result = -1;  // explicit safe default",
+      "if (condition) {",
+      "    result = compute();",
+      "}",
+      "return result;",
+    ],
+    explanation:"Initialise every variable at its declaration. Use -Wuninitialized (GCC/Clang) or run Valgrind/ASan. Rust refuses to compile code that reads possibly-uninitialised variables at the type-system level, eliminating this entire class.",
+  },
+  // ── Medium ────────────────────────────────────────────────────────────────────
+  {
+    id:"predicate-weak", name:"Predicate Weakening", tier:"medium", color:"#a78bfa", lang:"Python",
+    description:"A validation condition is too permissive — 'or' where 'and' is needed, < where <= is required, or a missing lower-bound check. Values that should be rejected sail through unchanged.",
+    cves:[
+      { id:"CVE-2020-1472", product:"Microsoft Netlogon (Zerologon)",
+        desc:"The authentication loop accepted up to 256 zero-padded guesses. A weak predicate on the session-key check meant an all-zero key was accepted, allowing instantaneous domain controller compromise with no credentials." },
+      { id:"CVE-2019-19781", product:"Citrix ADC / NetScaler Gateway",
+        desc:"A directory-traversal path check used OR logic that a crafted URL could satisfy with an unintended component, leading to unauthenticated RCE on the appliance." },
+    ],
+    vuln:[
+      "def is_valid_percentage(pct):",
+      "    # 'or' — ANY number satisfies one side of this",
+      "    if pct >= 0 or pct <= 100:",
+      "        return True",
+      "    return False",
+      "",
+      "is_valid_percentage(9999)  # → True  (wrong!)",
+      "is_valid_percentage(-50)   # → True  (wrong!)",
+    ],
+    fix:[
+      "def is_valid_percentage(pct):",
+      "    if pct >= 0 and pct <= 100:",
+      "        return True",
+      "    return False",
+    ],
+    explanation:"With 'or', `pct >= 0 or pct <= 100` holds for every real number — positives satisfy the left side, negatives satisfy the right. Both bounds must hold simultaneously, so 'and' is correct. Fuzz with values like -1, 0, 100, 101, sys.maxsize to catch weak predicates.",
+  },
+  {
+    id:"wrong-cache", name:"Bad Memoization", tier:"medium", color:"#38bdf8", lang:"JavaScript",
+    description:"A cache key that doesn't encode all inputs affecting the output creates collisions — two different inputs share a slot and return each other's results, potentially leaking privileged data across user sessions.",
+    cves:[
+      { id:"CVE-2020-5902", product:"F5 BIG-IP TMUI (management UI)",
+        desc:"The TMUI cache key omitted authentication state. A crafted URL caused cached admin pages to be served to unauthenticated users, enabling unauthenticated RCE on the management plane. CVSS 10.0." },
+      { id:"CVE-2018-6389", product:"WordPress (load-scripts.php)",
+        desc:"Script loader cached responses keyed only on the requested file list, ignoring user context, enabling DoS by requesting all registered scripts in a single unauthenticated request." },
+    ],
+    vuln:[
+      "const cache = new Map();",
+      "function getReport(userId, role) {",
+      "    // key omits role — admin sees user data and vice-versa",
+      "    if (cache.has(userId)) return cache.get(userId);",
+      "    const data = fetchReport(userId, role);",
+      "    cache.set(userId, data);",
+      "    return data;",
+      "}",
+    ],
+    fix:[
+      "const cache = new Map();",
+      "function getReport(userId, role) {",
+      "    const key = userId + ':' + role;  // all inputs in key",
+      "    if (cache.has(key)) return cache.get(key);",
+      "    const data = fetchReport(userId, role);",
+      "    cache.set(key, data);",
+      "    return data;",
+      "}",
+    ],
+    explanation:"The cache key must uniquely fingerprint every input that affects the output. Missing an input creates a data-mixing bug. Include user ID, role, locale, version, or any dimension that changes 'the correct answer'. Review cache eviction too — stale entries must expire.",
+  },
+  {
+    id:"dangling-iter", name:"Dangling Iterator", tier:"medium", color:"#fb923c", lang:"Python",
+    description:"Modifying a collection while iterating over it causes skipped elements (removal shifts indices), repeated elements (insertion), or crash (C++ iterator invalidation). The resulting behaviour is undefined and input-dependent.",
+    cves:[
+      { id:"CVE-2011-4862", product:"FreeBSD telnetd",
+        desc:"The telrcv() receive loop iterated over a buffer while simultaneously consuming from it via telnet option processing, allowing a remote attacker to corrupt memory through specially crafted option sequences." },
+      { id:"CVE-2021-35395", product:"Realtek SDK WiFi driver",
+        desc:"Iterator invalidation in vendor SDK list processing during AP scanning caused heap corruption, enabling unauthenticated RCE by broadcasting malicious beacon frames." },
+    ],
+    vuln:[
+      "def remove_expired(sessions):",
+      "    for s in sessions:        # iterator over live list",
+      "        if s.expired():",
+      "            sessions.remove(s)  # ← mutates the list!",
+      "    return sessions",
+      "",
+      "# Elements shift — every other expired entry is skipped",
+    ],
+    fix:[
+      "def remove_expired(sessions):",
+      "    # iterate a snapshot, mutate the original",
+      "    for s in list(sessions):",
+      "        if s.expired():",
+      "            sessions.remove(s)",
+      "    return sessions",
+      "    # or: return [s for s in sessions if not s.expired()]",
+    ],
+    explanation:"Iterate a snapshot (list(sessions)) while modifying the original, or build a new filtered list with a comprehension. In C++, use the erase-remove idiom or std::erase_if (C++20). In Java, use Iterator.remove() — not Collection.remove() inside a for-each.",
+  },
+  {
+    id:"state-corrupt", name:"State Corruption", tier:"medium", color:"#f59e0b", lang:"Python",
+    description:"A partially-completed multi-step operation fails midway, leaving shared or persistent state in an inconsistent half-old/half-new mix. Subsequent operations see contradictory invariants.",
+    cves:[
+      { id:"CVE-2014-6271", product:"GNU Bash (Shellshock)",
+        desc:"Bash imported function definitions from environment variables but kept parsing past the closing brace, corrupting the shell's execution environment with trailing commands that ran immediately — enabling RCE in CGI scripts." },
+      { id:"CVE-2021-28952", product:"Linux kernel (Nouveau GPU driver)",
+        desc:"Error recovery in GPU command submission partially updated driver state, leaving the hardware context inconsistent between kernel and GPU, exploitable by local users for privilege escalation." },
+    ],
+    vuln:[
+      "def transfer(src, dst, amount):",
+      "    src.balance -= amount      # ← applied",
+      "    if not dst.is_active():   # ← check after deduction!",
+      "        raise ValueError('inactive dst')  # money gone",
+      "    dst.balance += amount",
+    ],
+    fix:[
+      "def transfer(src, dst, amount):",
+      "    if not dst.is_active():    # validate ALL preconditions first",
+      "        raise ValueError('inactive dst')",
+      "    src.balance -= amount",
+      "    dst.balance += amount",
+    ],
+    explanation:"Validate all preconditions before making any mutations. For cross-resource operations, use database transactions (ACID atomicity), two-phase commit, or a rollback pattern so any failure leaves the system unchanged from before the call.",
+  },
+  // ── Hard ─────────────────────────────────────────────────────────────────────
+  {
+    id:"toctou", name:"TOCTOU Race", tier:"hard", color:"#f4485e", lang:"C",
+    description:"Time-of-Check to Time-of-Use: a window between checking a condition and acting on it lets an attacker swap state in the gap. The classic vector is replacing a regular file with a symlink between access() and open().",
+    cves:[
+      { id:"CVE-2017-7533", product:"Linux kernel (inotify / dcache)",
+        desc:"TOCTOU race in inotify_handle_event allowed dentry substitution between notification dispatch and the subsequent lookup, enabling privilege escalation via crafted filesystem events." },
+      { id:"CVE-2019-14615", product:"Intel GPU i915 driver",
+        desc:"TOCTOU in context descriptor validation: a field checked by the driver could be overwritten by a concurrent GPU submission before it was consumed, bypassing security isolation between VMs." },
+    ],
+    vuln:[
+      "/* attacker swaps /tmp/file → /etc/shadow between",
+      "   access() and open() */",
+      "if (access(\"/tmp/file\", R_OK) == 0) {",
+      "    int fd = open(\"/tmp/file\", O_RDONLY);",
+      "    read(fd, buf, sizeof(buf));  // may read /etc/shadow!",
+      "}",
+    ],
+    fix:[
+      "/* open() with O_NOFOLLOW is atomic — no symlink race */",
+      "int fd = open(\"/tmp/file\", O_RDONLY | O_NOFOLLOW);",
+      "if (fd < 0) { perror(\"open\"); return -1; }",
+      "/* operate on fd, not path — path can't change under us */",
+      "read(fd, buf, sizeof(buf));",
+      "close(fd);",
+    ],
+    explanation:"Eliminate the check-then-use gap by using atomic kernel operations. open(O_CREAT|O_EXCL) atomically creates-and-opens. openat(dirfd, name, O_NOFOLLOW) prevents symlink substitution. Check permissions via fd (fstat/faccessat) rather than the path.",
+  },
+  {
+    id:"lock-inversion", name:"Lock-order Inversion", tier:"hard", color:"#f59e0b", lang:"Python",
+    description:"Two threads acquire the same set of locks in different orders. If Thread A holds Lock-1 and waits for Lock-2 while Thread B holds Lock-2 and waits for Lock-1, both block forever — deadlock.",
+    cves:[
+      { id:"CVE-2019-2182", product:"Android kernel (mm / flock)",
+        desc:"Lock order inversion between mm->mmap_sem and file_lock in concurrent madvise() and flock() calls created a deadlock vector exploitable by local apps as a denial-of-service." },
+      { id:"CVE-2017-9077", product:"Linux kernel (TCP stack)",
+        desc:"Lock order inversion in tcp_sendmsg between sk_lock and a preemption disable caused a kernel hang under specific socket send load, triggering a local DoS." },
+    ],
+    vuln:[
+      "# Thread 1              # Thread 2",
+      "lock_A.acquire()        lock_B.acquire()",
+      "# ... critical work ... # ... critical work ...",
+      "lock_B.acquire()        lock_A.acquire()  # DEADLOCK",
+      "lock_B.release()        lock_A.release()",
+      "lock_A.release()        lock_B.release()",
+    ],
+    fix:[
+      "def acquire_ordered(*locks):",
+      "    # canonical order by object id — same every thread",
+      "    for lk in sorted(locks, key=id):",
+      "        lk.acquire()",
+      "",
+      "# Both threads call with same argument order now",
+      "acquire_ordered(lock_A, lock_B)",
+    ],
+    explanation:"Establish a total ordering on locks (by address, ID, or declared order) and enforce it across all threads. Linux's lockdep validator enforces this in kernel code. TSAN (ThreadSanitizer) detects inversions at runtime in C/C++/Go.",
+  },
+  {
+    id:"double-free", name:"Double Free", tier:"hard", color:"#ef4444", lang:"C",
+    description:"Calling free() twice on the same pointer corrupts the heap allocator's free-list metadata. An attacker who can trigger this can often redirect a future malloc() to an attacker-chosen address and gain code execution.",
+    cves:[
+      { id:"CVE-2019-11510", product:"Pulse Secure VPN (SSL VPN)",
+        desc:"Double free in the VPN authentication handler was reachable without credentials, allowing remote attackers to read arbitrary files and achieve RCE on the appliance. Widely exploited in the wild." },
+      { id:"CVE-2021-3493", product:"Ubuntu kernel (OverlayFS)",
+        desc:"Double free in copy_file_range syscall handler exploitable by local users via overlayfs mounts for privilege escalation to root on affected Ubuntu kernels." },
+    ],
+    vuln:[
+      "char *buf = malloc(SIZE);",
+      "if (error_condition) {",
+      "    free(buf);         // freed on error path",
+      "}",
+      "process(buf);          // use-after-free if error occurred",
+      "free(buf);             // double-free in all cases!",
+    ],
+    fix:[
+      "char *buf = malloc(SIZE);",
+      "if (error_condition) {",
+      "    free(buf);",
+      "    buf = NULL;        // nullify immediately after free",
+      "    return ERROR;",
+      "}",
+      "process(buf);",
+      "free(buf);",
+      "buf = NULL;",
+    ],
+    explanation:"Set the pointer to NULL after every free(). free(NULL) is a defined no-op, so subsequent frees are safe. Use AddressSanitizer (-fsanitize=address) to catch double-frees at test time. In C++, prefer std::unique_ptr — its destructor runs exactly once.",
+  },
+  {
+    id:"resource-leak", name:"Resource Leak", tier:"hard", color:"#fb923c", lang:"Python",
+    description:"An acquired resource (file descriptor, socket, lock, memory) is not released on every code path — especially exception/error paths. Over time the process exhausts its budget and fails or becomes vulnerable to resource-exhaustion attacks.",
+    cves:[
+      { id:"CVE-2019-10160", product:"Python CPython (urllib / http.client)",
+        desc:"File descriptors leaked when an HTTP connection was interrupted before headers were fully read. Under load, long-running Python servers exhausted their fd table, causing denial of service." },
+      { id:"CVE-2018-1000300", product:"libcurl (RTSP handler)",
+        desc:"Each RTSP DESCRIBE request leaked one file descriptor in the option-handling path. Long-running libcurl applications eventually crashed when the process fd table was exhausted." },
+    ],
+    vuln:[
+      "def read_config(path):",
+      "    f = open(path)",
+      "    data = f.read()     # if parse() raises, f is never closed",
+      "    result = parse(data)",
+      "    f.close()",
+      "    return result",
+    ],
+    fix:[
+      "def read_config(path):",
+      "    with open(path) as f:   # closed on any exit path",
+      "        data = f.read()",
+      "    return parse(data)",
+    ],
+    explanation:"Use 'with' (Python context manager), try/finally, RAII (C++), or defer (Go) to guarantee cleanup on all exit paths — including exceptions, early returns, and panics. Never assume the happy path is the only path.",
+  },
+  // ── Expert ────────────────────────────────────────────────────────────────────
+  {
+    id:"int-truncation", name:"Integer Truncation", tier:"expert", color:"#f4485e", lang:"C",
+    description:"A large integer (64-bit size_t or attacker-supplied count) is stored in a narrower type (32-bit int), silently discarding high bits. The truncated small value passes safety checks while causing the actual allocation to be too small, resulting in heap overflow.",
+    cves:[
+      { id:"CVE-2021-3156", product:"sudo (get_args heap overflow)",
+        desc:"The argument-array size was computed as an int that overflowed for very long sudo command lines. The truncated small positive value caused malloc() to under-allocate, and the subsequent argv copy overflowed the heap — granting any local user root. CVSS 7.8." },
+      { id:"CVE-2002-0639", product:"OpenSSH (keyboard-interactive auth)",
+        desc:"Integer overflow in the challenge-response count truncated to a small type, wrapping the count to near-zero. This bypassed authentication or enabled heap corruption depending on the server's handling." },
+    ],
+    vuln:[
+      "/* count comes from the network — attacker-controlled */",
+      "int   num   = ntohl(hdr.count);    /* 32-bit signed  */",
+      "int   bytes = num * sizeof(item);  /* overflows!     */",
+      "void *buf   = malloc(bytes);       /* tiny alloc     */",
+      "memcpy(buf, data, num * sizeof(item));  /* overflow! */",
+    ],
+    fix:[
+      "uint32_t num = ntohl(hdr.count);",
+      "if (num > MAX_ITEMS) return -EINVAL;",
+      "size_t bytes = (size_t)num * sizeof(item); /* 64-bit */",
+      "void *buf = malloc(bytes);",
+      "if (!buf) return -ENOMEM;",
+      "memcpy(buf, data, bytes);",
+    ],
+    explanation:"Perform size arithmetic in size_t (unsigned 64-bit on modern platforms). Check for multiplication overflow before computing sizes — or use reallocarray(3) which does the checked multiply internally. Never mix signed int with attacker-controlled sizes.",
+  },
+  {
+    id:"signed-unsigned", name:"Signed / Unsigned Confusion", tier:"expert", color:"#ef4444", lang:"C",
+    description:"Comparing a signed integer to an unsigned one silently promotes the signed value. A negative signed value becomes a very large unsigned number, bypassing upper-bound checks. This is the root cause of Heartbleed.",
+    cves:[
+      { id:"CVE-2014-0160", product:"OpenSSL (TLS Heartbeat — Heartbleed)",
+        desc:"The heartbeat payload length was read as uint16 from the attacker's packet but there was no check that it was ≤ the actual remaining bytes. A negative or over-large length passed the missing lower-bound check, allowing the attacker to drain up to 64 KB of server memory per request, exposing private keys and session tokens. CVSS 7.5." },
+      { id:"CVE-2008-2137", product:"Sun Solaris kernel (ioctl handler)",
+        desc:"A signed/unsigned comparison in an ioctl argument handler let a negative user-supplied length pass an upper-bound check. When cast to size_t it became huge, triggering an out-of-bounds kernel memory read." },
+    ],
+    vuln:[
+      "/* len is int16_t — attacker controls its value */",
+      "int16_t  len = read_i16(packet);",
+      "if (len > MAX_LEN) return ERROR;  /* passes if len < 0! */",
+      "/* negative len cast to huge size_t → over-read */",
+      "memcpy(response, heap_buf, len);",
+    ],
+    fix:[
+      "uint16_t len = read_u16(packet);   /* unsigned from start */",
+      "if (len == 0 || len > MAX_LEN) return ERROR;",
+      "if (len > remaining_in_packet) return ERROR; /* Heartbleed fix */",
+      "memcpy(response, packet_data, len);",
+    ],
+    explanation:"Lengths and sizes should always be unsigned types. Compile with -Wsign-compare to catch mixed-sign comparisons. The critical missing check in Heartbleed was not 'len > 0' but 'len ≤ actual payload bytes remaining in the packet'.",
+  },
+  {
+    id:"timing-channel", name:"Timing Side Channel", tier:"expert", color:"#a78bfa", lang:"Python",
+    description:"A secret-dependent early exit causes the comparison to take measurably different time depending on the secret value. An attacker who can make many requests and measure latency can recover the secret byte-by-byte without ever seeing it directly.",
+    cves:[
+      { id:"CVE-2003-0693", product:"OpenSSH (CBC mode padding oracle)",
+        desc:"Timing differences in CBC decryption padding validation were measurable via network RTT — a man-in-the-middle could recover SSH plaintext through a padding oracle attack." },
+      { id:"CVE-2016-6304", product:"OpenSSL (OCSP stapling response)",
+        desc:"Non-constant-time comparison of OCSP nonce values leaked information about the server's expected nonce, enabling an attacker to infer private state through repeated timing measurements." },
+    ],
+    vuln:[
+      "def verify_token(user_input, secret):",
+      "    for a, b in zip(user_input, secret):",
+      "        if a != b:",
+      "            return False  # exits early on first mismatch",
+      "    return len(user_input) == len(secret)",
+      "",
+      "# Attacker measures latency to learn which bytes match",
+    ],
+    fix:[
+      "import hmac",
+      "",
+      "def verify_token(user_input, secret):",
+      "    # constant time regardless of where mismatch occurs",
+      "    return hmac.compare_digest(",
+      "        user_input.encode(), secret.encode()",
+      "    )",
+    ],
+    explanation:"Use constant-time comparison: Python hmac.compare_digest, C crypto_memcmp / CRYPTO_memcmp, Node.js crypto.timingSafeEqual. These XOR-accumulate differences and branch only once at the end. Never compare secrets with ==, !=, or strcmp.",
+  },
+  {
+    id:"invariant-break", name:"Invariant Violation", tier:"expert", color:"#f59e0b", lang:"Python",
+    description:"Code relies on an implicit invariant — a property assumed to always be true — that can be violated by unexpected input or operation order. When the invariant breaks, all code that relied on it produces undefined or exploitable results.",
+    cves:[
+      { id:"CVE-2014-6271", product:"GNU Bash (Shellshock)",
+        desc:"Bash assumed env-var function definitions ended at the closing brace. The invariant 'env vars are inert data' was violated — trailing commands after the brace executed immediately on shell launch, enabling RCE in CGI scripts and DHCP hooks worldwide." },
+      { id:"CVE-2021-44228", product:"Apache Log4j 2 (Log4Shell)",
+        desc:"Log4j assumed log message strings were inert data. The invariant 'logging does not execute code' was violated by ${jndi:ldap://attacker/x} substitution in any logged string, triggering remote classloading and RCE. CVSS 10.0." },
+    ],
+    vuln:[
+      "class SortedList:",
+      "    def __init__(self):",
+      "        self._data = []   # invariant: always sorted",
+      "",
+      "    def add(self, val):",
+      "        self._data.append(val)   # ← breaks invariant!",
+      "",
+      "    def find(self, target):      # assumes sorted input",
+      "        return binary_search(self._data, target)",
+    ],
+    fix:[
+      "import bisect",
+      "",
+      "class SortedList:",
+      "    def __init__(self):",
+      "        self._data = []",
+      "",
+      "    def add(self, val):",
+      "        bisect.insort(self._data, val)  # maintains order",
+      "",
+      "    def find(self, target):",
+      "        i = bisect.bisect_left(self._data, target)",
+      "        if i < len(self._data) and self._data[i] == target:",
+      "            return self._data[i]",
+      "        return None",
+    ],
+    explanation:"Document invariants explicitly via type signatures, assertions, or precondition comments. Use assert statements in debug builds to catch violations early. For security-relevant invariants — 'this string is shell-safe', 'this value is already escaped' — validate at every trust boundary.",
+  },
 ];
 
 const INIT_GS = {
@@ -265,6 +798,48 @@ body::before{content:'';position:fixed;inset:0;pointer-events:none;z-index:9999;
 
 /* polling badge */
 .poll-badge{font-family:var(--mono);font-size:10px;color:var(--dim);padding:2px 8px;border-radius:100px;border:1px solid var(--border)}
+
+/* tutorial */
+.tut-wrap{flex:1;display:flex;flex-direction:column;overflow:hidden}
+.tut-hdr{display:flex;align-items:center;gap:10px;padding:11px 20px;border-bottom:1px solid var(--border);background:var(--surface);flex-shrink:0}
+.tut-title{font-size:15px;font-weight:700;color:var(--bright)}
+.tut-banner{display:flex;align-items:flex-start;gap:12px;padding:13px 20px;border-bottom:1px solid var(--border);flex-shrink:0}
+.tut-inject-banner{background:rgba(244,72,94,.07);border-bottom:1px solid rgba(244,72,94,.22)}
+.tut-hunt-banner{background:rgba(34,216,122,.06);border-bottom:1px solid rgba(34,216,122,.22)}
+.tut-bico{font-size:20px;flex-shrink:0;padding-top:2px}
+.tut-bttl{font-size:12px;font-weight:700;color:var(--bright);letter-spacing:.03em;margin-bottom:4px}
+.tut-bmsg{font-size:13px;color:var(--text);line-height:1.65}
+.tut-flow{flex:1;display:flex;flex-direction:column;overflow:hidden}
+
+/* encyclopedia */
+.ency{flex:1;display:flex;flex-direction:column;overflow:hidden;min-height:0}
+.ency-hdr{display:flex;align-items:center;gap:12px;padding:13px 20px;border-bottom:1px solid var(--border);background:var(--surface);flex-shrink:0}
+.ency-title{font-size:18px;font-weight:800;color:var(--bright)}
+.ency-body{display:flex;flex:1;overflow:hidden;min-height:0}
+.ency-sidebar{width:210px;border-right:1px solid var(--border);overflow-y:auto;flex-shrink:0;background:var(--surface);padding:8px 0}
+.ency-tier-lbl{font-family:var(--mono);font-size:10px;color:var(--dim);letter-spacing:.1em;text-transform:uppercase;padding:10px 16px 4px}
+.ency-item{padding:8px 14px;font-size:12px;cursor:pointer;color:var(--dim);display:flex;align-items:center;gap:8px;transition:background .1s}
+.ency-item:hover{background:var(--surface2);color:var(--text)}
+.ency-item.on{background:var(--accent-bg);color:var(--accent)}
+.ency-edot{width:7px;height:7px;border-radius:50%;flex-shrink:0}
+.ency-content{flex:1;overflow-y:auto;padding:24px 28px}
+.ency-bug-title{font-size:22px;font-weight:800;color:var(--bright)}
+.ency-section{margin-top:20px}
+.ency-section-lbl{font-family:var(--mono);font-size:10px;color:var(--dim);letter-spacing:.1em;text-transform:uppercase;margin-bottom:10px;padding-bottom:6px;border-bottom:1px solid var(--border)}
+.ency-desc{font-size:13px;color:var(--text);line-height:1.8}
+.cve-row{display:flex;gap:12px;padding:10px 0;border-bottom:1px solid var(--border);align-items:flex-start}
+.cve-id{font-family:var(--mono);font-size:11px;color:var(--accent);min-width:135px;flex-shrink:0;padding-top:2px}
+.cve-prod{font-size:12px;font-weight:700;color:var(--bright);margin-bottom:3px}
+.cve-desc-t{font-size:11px;color:var(--dim);line-height:1.55}
+.code-pair{display:grid;grid-template-columns:1fr 1fr;gap:12px}
+.cblk{background:var(--surface);border:1px solid var(--border);border-radius:var(--r);overflow:hidden}
+.cblk-hdr{display:flex;align-items:center;gap:7px;padding:8px 12px;border-bottom:1px solid var(--border);background:var(--surface2)}
+.cblk-dot{width:8px;height:8px;border-radius:50%;flex-shrink:0}
+.cblk-lbl{font-family:var(--mono);font-size:11px}
+.cblk-lbl.vuln{color:var(--red)}.cblk-lbl.fix{color:var(--green)}
+.cblk-body{padding:14px;overflow-x:auto}
+.cblk-code{font-family:var(--mono);font-size:12px;line-height:1.7;color:var(--text);white-space:pre;margin:0}
+.ency-expl{background:var(--surface2);border-left:3px solid var(--accent);border-radius:0 var(--r) var(--r) 0;padding:12px 15px;font-size:13px;color:var(--text);line-height:1.7}
 `;
 
 // Local stub for window.storage (replaces Claude artifact storage)
@@ -346,7 +921,7 @@ function CodeView({ snippet, selectedLine, onSelectLine, showInjected, phase }) 
 
 // ── TopBar ────────────────────────────────────────────────────────────────────
 
-function TopBar({ gs, myRole, roomCode, onLeave, ticks }) {
+function TopBar({ gs, myRole, roomCode, onLeave, onEncy, ticks }) {
   const phases = ["inject","review","reveal"];
   const order  = ["lobby","inject","review","reveal"];
   return (
@@ -363,6 +938,7 @@ function TopBar({ gs, myRole, roomCode, onLeave, ticks }) {
       <div className="sbadge">🐛 <span>{gs.scores[0]}</span> · 🔍 <span>{gs.scores[1]}</span></div>
       {roomCode && <div className="pill"># {roomCode}</div>}
       <span className="poll-badge">⟳ live</span>
+      <button className="btn btn-gh btn-sm" onClick={onEncy}>Encyc.</button>
       <button className="btn btn-gh btn-sm" onClick={onLeave}>Leave</button>
     </div>
   );
@@ -370,14 +946,14 @@ function TopBar({ gs, myRole, roomCode, onLeave, ticks }) {
 
 // ── connection screens ────────────────────────────────────────────────────────
 
-function HomeScreen({ onCreate, onJoin, error }) {
+function HomeScreen({ onCreate, onJoin, onEncy, onTutorial, error }) {
   return (
     <div className="cscreen fade">
       <div style={{textAlign:"center"}}>
         <div className="blogo">Bug<span>Lab</span></div>
         <div className="bsub" style={{marginTop:8}}>real-time multiplayer bug injection</div>
       </div>
-      <div style={{display:"flex",gap:12}}>
+      <div style={{display:"flex",gap:12,flexWrap:"wrap",justifyContent:"center"}}>
         <button className="btn btn-pr" style={{minWidth:150,padding:"13px 26px",fontSize:16}} onClick={onCreate}>
           Create room
         </button>
@@ -386,6 +962,10 @@ function HomeScreen({ onCreate, onJoin, error }) {
         </button>
       </div>
       {error && <div className="cerr">{error}</div>}
+      <div style={{display:"flex",gap:10}}>
+        <button className="btn btn-gh btn-sm" onClick={onTutorial}>Tutorial</button>
+        <button className="btn btn-gh btn-sm" onClick={onEncy}>Encyclopedia</button>
+      </div>
       <div className="chint">One player creates a room and shares the 6-letter code.<br/>No accounts or installs needed — uses shared artifact storage.</div>
     </div>
   );
@@ -445,6 +1025,322 @@ function DisconnectedScreen({ onHome }) {
         <div className="chint" style={{textAlign:"center"}}>The host left or the session expired.</div>
         <button className="btn btn-pr btn-fw" onClick={onHome}>Back to home</button>
       </div>
+    </div>
+  );
+}
+
+// ── encyclopedia ──────────────────────────────────────────────────────────────
+
+function EncyclopediaDetail({ entry }) {
+  const d = DIFFICULTIES.find(x => x.id === entry.tier) || DIFFICULTIES[0];
+  return (
+    <div className="fade">
+      <div style={{display:"flex",alignItems:"center",gap:10,flexWrap:"wrap",marginBottom:10}}>
+        <div className="ency-bug-title">{entry.name}</div>
+        <span className="tag" style={{borderColor:d.color,color:d.color,background:d.color+"18"}}>{d.label}</span>
+        <span className="tag" style={{borderColor:"var(--border)",color:"var(--dim)"}}>{entry.lang}</span>
+      </div>
+
+      <div className="ency-desc">{entry.description}</div>
+
+      <div className="ency-section">
+        <div className="ency-section-lbl">Real CVE Examples</div>
+        <div>
+          {entry.cves.map(cve => (
+            <div key={cve.id} className="cve-row">
+              <div className="cve-id">{cve.id}</div>
+              <div>
+                <div className="cve-prod">{cve.product}</div>
+                <div className="cve-desc-t">{cve.desc}</div>
+              </div>
+            </div>
+          ))}
+        </div>
+      </div>
+
+      <div className="ency-section">
+        <div className="ency-section-lbl">Code Samples</div>
+        <div className="code-pair">
+          <div className="cblk">
+            <div className="cblk-hdr">
+              <div className="cblk-dot" style={{background:"var(--red)"}}/>
+              <span className="cblk-lbl vuln">Vulnerable</span>
+            </div>
+            <div className="cblk-body">
+              <pre className="cblk-code">{entry.vuln.join("\n")}</pre>
+            </div>
+          </div>
+          <div className="cblk">
+            <div className="cblk-hdr">
+              <div className="cblk-dot" style={{background:"var(--green)"}}/>
+              <span className="cblk-lbl fix">Fixed</span>
+            </div>
+            <div className="cblk-body">
+              <pre className="cblk-code">{entry.fix.join("\n")}</pre>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div className="ency-section" style={{marginBottom:24}}>
+        <div className="ency-section-lbl">Why It Happens</div>
+        <div className="ency-expl">{entry.explanation}</div>
+      </div>
+    </div>
+  );
+}
+
+function EncyclopediaScreen({ onClose }) {
+  const [selectedId, setSelectedId] = useState(ENCYCLOPEDIA[0].id);
+  const entry = ENCYCLOPEDIA.find(e => e.id === selectedId);
+  const tiers = ["easy","medium","hard","expert"];
+  const tierLabels = {easy:"Easy",medium:"Medium",hard:"Hard",expert:"Expert"};
+
+  return (
+    <div className="ency">
+      <div className="ency-hdr">
+        <div className="ency-title">Bug Encyclopedia</div>
+        <span className="hint" style={{flex:1}}>18 bug classes · real CVEs · code samples</span>
+        <button className="btn btn-gh btn-sm" onClick={onClose}>← Back</button>
+      </div>
+      <div className="ency-body">
+        <div className="ency-sidebar">
+          {tiers.map(tier => (
+            <div key={tier}>
+              <div className="ency-tier-lbl">{tierLabels[tier]}</div>
+              {ENCYCLOPEDIA.filter(e => e.tier === tier).map(e => (
+                <div key={e.id}
+                  className={cx("ency-item", selectedId === e.id ? "on" : "")}
+                  onClick={() => setSelectedId(e.id)}>
+                  <div className="ency-edot" style={{background:e.color}}/>
+                  {e.name}
+                </div>
+              ))}
+            </div>
+          ))}
+        </div>
+        <div className="ency-content">
+          {entry && <EncyclopediaDetail key={entry.id} entry={entry} />}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ── tutorial ──────────────────────────────────────────────────────────────────
+
+const TUT_SN = SNIPPETS.find(s => s.id === "sum"); // sum_list · Python · Easy · off-by-one
+
+function TutorialScreen({ onClose }) {
+  const [phase,    setPhase]    = useState("intro");
+  const [huntLine, setHuntLine] = useState(null);
+  const [huntType, setHuntType] = useState(null);
+
+  const sn     = TUT_SN;
+  const btMeta = BUG_TYPES.find(b => b.id === sn.bugType);
+  const lc     = huntLine === sn.bugLine;
+  const tc     = huntType === sn.bugType;
+  const pts    = (lc ? 60 : 0) + (tc ? 40 : 0);
+
+  const STEP_LABELS = {
+    "inject-watch": "Step 1 of 3 — Injector",
+    "hunt-intro":   "Step 2 of 3 — Role switch",
+    "hunt-line":    "Step 2 of 3 — Hunter",
+    "hunt-type":    "Step 2 of 3 — Hunter",
+    "hunt-submit":  "Step 2 of 3 — Hunter",
+    "reveal":       "Step 3 of 3 — Reveal",
+    "done":         "Complete",
+  };
+
+  function pickHuntType(id) {
+    if (phase !== "hunt-type") return;
+    setHuntType(id);
+    setPhase("hunt-submit");
+  }
+
+  return (
+    <div className="tut-wrap">
+      {/* ── shared header ── */}
+      <div className="tut-hdr">
+        <div className="tut-title">Tutorial</div>
+        {STEP_LABELS[phase] && <span className="poll-badge">{STEP_LABELS[phase]}</span>}
+        <div className="sep"/>
+        <button className="btn btn-gh btn-sm" onClick={onClose}>Skip ×</button>
+      </div>
+
+      {/* ── intro ── */}
+      {phase === "intro" && (
+        <div className="cscreen fade">
+          <div style={{textAlign:"center",maxWidth:440}}>
+            <div style={{fontSize:46,marginBottom:14}}>🐛</div>
+            <div style={{fontSize:22,fontWeight:800,color:"var(--bright)",marginBottom:10}}>Welcome to BugLab</div>
+            <div className="chint" style={{fontSize:13,lineHeight:1.9,marginBottom:24}}>
+              BugLab is a two-player cat-and-mouse game.<br/>
+              <strong style={{color:"var(--text)"}}>Injector 🐛</strong> — plants a bug in a code snippet.<br/>
+              <strong style={{color:"var(--text)"}}>Hunter 🔍</strong> — reads the tampered code and finds it.<br/><br/>
+              This tutorial walks you through <em>both roles</em> using a short Python snippet. Takes about 2 minutes.
+            </div>
+            <button className="btn btn-pr" style={{minWidth:200}} onClick={()=>setPhase("inject-watch")}>
+              Start tutorial →
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* ── inject-watch: demo the injector role ── */}
+      {phase === "inject-watch" && (
+        <div className="tut-flow fade">
+          <div className="tut-banner tut-inject-banner">
+            <div className="tut-bico">🐛</div>
+            <div>
+              <div className="tut-bttl">You are the Injector</div>
+              <div className="tut-bmsg">
+                Line {sn.bugLine+1} is pre-selected — the for-loop — and the bug type is already set to{" "}
+                <strong style={{color:"var(--red)"}}>Off-by-one</strong>.{" "}
+                Click <em>Inject &amp; lock</em> to plant the bug and switch to the Hunter's view.
+              </div>
+            </div>
+          </div>
+          <div className="gpanel">
+            <CodeView snippet={sn} selectedLine={sn.bugLine}
+              onSelectLine={null} showInjected={false} phase="inject"/>
+            <div>
+              <div className="sl" style={{marginBottom:8}}>bug type (pre-selected)</div>
+              <div className="bgrid">
+                {BUG_TYPES.filter(b => b.tier === sn.difficulty).map(b => (
+                  <div key={b.id} className="bchip"
+                    style={b.id===sn.bugType?{borderColor:b.color,background:b.color+"18",color:b.color}:{}}>
+                    {b.label}
+                  </div>
+                ))}
+              </div>
+            </div>
+            <button className="btn btn-dn btn-fw" onClick={()=>setPhase("hunt-intro")}>
+              Inject &amp; lock →
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* ── hunt-intro: role-switch explanation ── */}
+      {phase === "hunt-intro" && (
+        <div className="cscreen fade">
+          <div style={{textAlign:"center",maxWidth:440}}>
+            <div style={{fontSize:46,marginBottom:14}}>🔍</div>
+            <div style={{fontSize:20,fontWeight:800,color:"var(--bright)",marginBottom:10}}>Role Switch — You're the Hunter</div>
+            <div className="chint" style={{fontSize:13,lineHeight:1.85,marginBottom:24}}>
+              The bug is now planted. In a real match the Hunter sees only the modified code — they have no idea which line was changed or what type of bug was injected.<br/><br/>
+              Read the snippet carefully and try to spot what's wrong.
+            </div>
+            <button className="btn btn-pr" style={{minWidth:200}} onClick={()=>setPhase("hunt-line")}>
+              Start hunting →
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* ── hunt phases ── */}
+      {(phase==="hunt-line"||phase==="hunt-type"||phase==="hunt-submit") && (
+        <div className="tut-flow fade">
+          <div className="tut-banner tut-hunt-banner">
+            <div className="tut-bico">🔍</div>
+            <div>
+              <div className="tut-bttl">You are the Hunter</div>
+              <div className="tut-bmsg">
+                {phase==="hunt-line" && "Click the line you think contains the injected bug."}
+                {phase==="hunt-type" && <>Line {(huntLine??0)+1} flagged. <strong>What kind of bug is it?</strong> Select the bug type below.</>}
+                {phase==="hunt-submit" && "Analysis complete. Click Submit to reveal the result."}
+              </div>
+            </div>
+          </div>
+          <div className="gpanel">
+            <CodeView snippet={sn} selectedLine={huntLine}
+              onSelectLine={phase==="hunt-line" ? i=>{setHuntLine(i);setPhase("hunt-type");} : null}
+              showInjected={true} phase="review"/>
+            {(phase==="hunt-type"||phase==="hunt-submit") && (
+              <div>
+                <div className="sl" style={{marginBottom:8}}>identify the bug type</div>
+                <div className="bgrid">
+                  {BUG_TYPES.filter(b => b.tier===sn.difficulty).map(b=>(
+                    <div key={b.id} className="bchip"
+                      style={huntType===b.id?{borderColor:b.color,background:b.color+"18",color:b.color}:{}}
+                      onClick={()=>pickHuntType(b.id)}>
+                      {b.label}
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+            {phase==="hunt-submit" && (
+              <button className="btn btn-pr btn-fw" onClick={()=>setPhase("reveal")}>
+                Submit analysis →
+              </button>
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* ── reveal ── */}
+      {phase === "reveal" && (
+        <div className="reveal fade">
+          <div style={{display:"flex",alignItems:"center",gap:12}}>
+            <div className={cx("rv-title", pts===100?"win":pts>=60?"pt":"lose")}>
+              {pts===100?"Perfect catch!":pts>=60?"Good eye!":"Missed it."}
+            </div>
+            <span className="tag" style={{borderColor:"var(--green)",color:"var(--green)",background:"var(--green-bg)"}}>Tutorial · 1×</span>
+          </div>
+          <div className="sgrid3">
+            <div className="sc">
+              <div className="sc-lbl">line detection</div>
+              <div className="sc-val" style={{color:lc?"var(--green)":"var(--red)"}}>{lc?"+60":"+0"}</div>
+              <div className="sc-sub">{lc?"correct — line "+(sn.bugLine+1):"missed — was line "+(sn.bugLine+1)}</div>
+            </div>
+            <div className="sc">
+              <div className="sc-lbl">bug type</div>
+              <div className="sc-val" style={{color:tc?"var(--green)":"var(--red)"}}>{tc?"+40":"+0"}</div>
+              <div className="sc-sub">{tc?"correct":"was: "+btMeta?.label}</div>
+            </div>
+            <div className="sc">
+              <div className="sc-lbl">your score</div>
+              <div className="sc-val" style={{color:"var(--amber)"}}>{pts}<span style={{fontSize:13,color:"var(--dim)"}}> / 100</span></div>
+              <div className="sc-sub">{pts===100?"flawless!":pts>=60?"solid read":"review the diff below"}</div>
+            </div>
+          </div>
+          <div>
+            <div className="sl" style={{marginBottom:9}}>diff</div>
+            <div className="diff-b">
+              <div className="diff-h">{sn.language} · {sn.label} · line {sn.bugLine+1}</div>
+              <div className="dln rm"><span className="dsign">−</span>{sn.injectedLine}</div>
+              <div className="dln add"><span className="dsign">+</span>{sn.patch}</div>
+            </div>
+          </div>
+          <div>
+            <div className="sl" style={{marginBottom:9}}>explanation</div>
+            <div className="expl">{sn.explanation}</div>
+          </div>
+          <button className="btn btn-pr" onClick={()=>setPhase("done")}>
+            Complete tutorial →
+          </button>
+        </div>
+      )}
+
+      {/* ── done ── */}
+      {phase === "done" && (
+        <div className="cscreen fade">
+          <div style={{textAlign:"center",maxWidth:480}}>
+            <div style={{fontSize:46,marginBottom:14}}>🎉</div>
+            <div style={{fontSize:22,fontWeight:800,color:"var(--bright)",marginBottom:10}}>You're ready to play!</div>
+            <div className="chint" style={{fontSize:13,lineHeight:1.95,marginBottom:26,maxWidth:400,textAlign:"left"}}>
+              <strong style={{color:"var(--text)"}}>Scoring:</strong> 60 pts for the correct line + 40 pts for the correct type, multiplied by tier (up to 3×).<br/>
+              <strong style={{color:"var(--text)"}}>Injector tip:</strong> you earn the points the Hunter <em>misses</em> — subtle bugs score more.<br/>
+              <strong style={{color:"var(--text)"}}>Hunter tip:</strong> read every operator, loop bound, and condition — one character is all it takes.
+            </div>
+            <button className="btn btn-pr" style={{minWidth:200}} onClick={onClose}>
+              Play now →
+            </button>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
@@ -714,6 +1610,8 @@ export default function BugLab() {
   const [copied,    setCopied]    = useState(false);
   const [gs,        setGs]        = useState(INIT_GS);
   const [ticks,     setTicks]     = useState(0); // just to show liveness
+  const [encyOpen,  setEncyOpen]  = useState(false);
+  const [tutOpen,   setTutOpen]   = useState(false);
 
   // Refs (always fresh in poll callbacks)
   const gsRef        = useRef(INIT_GS);
@@ -878,13 +1776,37 @@ export default function BugLab() {
 
   const isHost    = myRole==="host";
   const snippet   = gs.snippetId ? SNIPPETS.find(s=>s.id===gs.snippetId) : null;
+  const openEncy  = () => { setEncyOpen(true); setTutOpen(false); };
+  const closeEncy = () => setEncyOpen(false);
+  const openTut   = () => { setTutOpen(true); setEncyOpen(false); };
+  const closeTut  = () => setTutOpen(false);
+
+  if (tutOpen) {
+    return (
+      <div className="app">
+        {connState==="connected" &&
+          <TopBar gs={gs} myRole={myRole} roomCode={roomCode} onLeave={disconnect} onEncy={openEncy} ticks={ticks}/>}
+        <TutorialScreen onClose={closeTut} />
+      </div>
+    );
+  }
+
+  if (encyOpen) {
+    return (
+      <div className="app">
+        {connState==="connected" &&
+          <TopBar gs={gs} myRole={myRole} roomCode={roomCode} onLeave={disconnect} onEncy={closeEncy} ticks={ticks}/>}
+        <EncyclopediaScreen onClose={closeEncy} />
+      </div>
+    );
+  }
 
   return (
     <div className="app">
       {connState==="connected" &&
-        <TopBar gs={gs} myRole={myRole} roomCode={roomCode} onLeave={disconnect} ticks={ticks}/>}
+        <TopBar gs={gs} myRole={myRole} roomCode={roomCode} onLeave={disconnect} onEncy={openEncy} ticks={ticks}/>}
 
-      {connState==="home"        && <HomeScreen onCreate={createRoom} onJoin={()=>{setConnError("");setConnState("joining");}} error={connError}/>}
+      {connState==="home"        && <HomeScreen onCreate={createRoom} onJoin={()=>{setConnError("");setConnState("joining");}} onEncy={openEncy} onTutorial={openTut} error={connError}/>}
       {connState==="waiting"     && <WaitingScreen code={roomCode} onCancel={disconnect} onCopy={copyCode} copied={copied}/>}
       {connState==="joining"     && <JoinScreen value={joinInput} onChange={setJoinInput} onJoin={joinRoom} onBack={()=>setConnState("home")} error={connError}/>}
       {connState==="connecting"  && <ConnectingScreen code={joinInput}/>}
